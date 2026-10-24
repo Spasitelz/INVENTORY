@@ -1,6 +1,10 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>html,body{margin:0}[hidden]{display:none!important}img{max-width:100%}</style>
 <title>Buku Stok Gudang</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -85,6 +89,8 @@ tfoot td{font-weight:600;background:var(--sunken)}
 .confirm{display:inline-flex;gap:6px;align-items:center;font-size:.78rem;color:var(--crit)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <header class="top">
@@ -92,7 +98,7 @@ tfoot td{font-weight:600;background:var(--sunken)}
       <h1>Buku Stok Gudang</h1>
       <p class="sub">Pencatatan barang masuk, barang keluar, dan saldo stok.</p>
     </div>
-    <div class="conn"><span class="dot" id="connDot"></span><span id="connTxt">Menghubungkan ke data…</span></div>
+    <div class="conn"><span class="dot" id="connDot"></span><span id="connTxt">Memuat data…</span></div>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -206,6 +212,17 @@ tfoot td{font-weight:600;background:var(--sunken)}
       <div class="actions"><button class="btn primary" type="submit" id="bSubmit">Simpan barang</button><button class="btn" type="button" id="bBatal" hidden>Batal ubah</button></div>
       <div id="bMsg"></div>
     </form>
+    <div class="panel">
+      <h2>Cadangan data</h2>
+      <p class="hint">Data tersimpan di browser perangkat ini. Unduh cadangan secara rutin, misalnya setiap akhir minggu. File cadangan juga dipakai untuk memindahkan data ke komputer lain.</p>
+      <div class="actions">
+        <button class="btn primary" type="button" id="bakUnduh">Unduh cadangan (.json)</button>
+        <label class="btn" style="flex-direction:row;color:var(--fg);font-size:.9rem" for="bakFile">Pulihkan dari file</label>
+        <input type="file" id="bakFile" accept=".json,application/json" hidden>
+      </div>
+      <div id="bakConfirm"></div>
+      <div id="bakMsg"></div>
+    </div>
     <div class="panel">
       <h2>Daftar barang</h2>
       <div class="tbl"><table>
@@ -334,7 +351,7 @@ tfoot td{font-weight:600;background:var(--sunken)}
 
   // ---------- Pesan ----------
   function say(el,txt,ok){ $(el).innerHTML=txt?`<div class="msg ${ok?"ok":"err"}">${esc(txt)}</div>`:""; if(ok&&txt) setTimeout(()=>{ if($(el).textContent===txt) $(el).innerHTML=""; },5000); }
-  function errText(e){ if(!e) return "Terjadi kesalahan."; if(e.code==="invalid_argument") return "Anda tidak punya izin mengubah data ini. Minta pemilik memberi akses Contributor atau Editor."; if(e.code==="quota_exceeded") return "Kapasitas data penuh. Hapus transaksi lama yang tidak diperlukan."; return "Gagal menyimpan ("+(e.code||"error")+"). Coba lagi."; }
+  function errText(e){ if(!e) return "Terjadi kesalahan."; if(e.code==="storage") return "Browser menolak menyimpan data. Matikan mode penyamaran (incognito) dan pastikan ruang penyimpanan browser masih cukup."; return "Gagal menyimpan ("+(e.code||"error")+"). Coba lagi."; }
 
   // ---------- No dokumen otomatis ----------
   function nextNoDok(prefix,tgl){
@@ -425,20 +442,59 @@ tfoot td{font-weight:600;background:var(--sunken)}
     catch(err){ if(err&&err.code!=="declined") say("rMsg","Unduhan gagal ("+(err.code||"error")+")."); }
   });
 
-  // ---------- Koneksi ----------
+  // ---------- Penyimpanan lokal (localStorage) ----------
+  function makeLocalDB(){
+    const KEY="bukuStokGudang.v1";
+    let store={barang:{},transaksi:{}};
+    const load=()=>{ try{ const o=JSON.parse(localStorage.getItem(KEY)||"null"); if(o&&typeof o==="object"){ store={barang:o.barang||{},transaksi:o.transaksi||{}}; } }catch(_){ } };
+    load();
+    const subs={barang:[],transaksi:[]};
+    const persist=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){ throw {code:"storage"}; } };
+    const emit=c=>{ const docs=Object.entries(store[c]).map(([id,v])=>({id,exists:true,data:()=>v})); subs[c].forEach(f=>f({docs,size:docs.length,empty:!docs.length})); };
+    const write=(fn,c)=>{ const before=JSON.stringify(store[c]); try{ fn(); persist(); }catch(e){ store[c]=JSON.parse(before); return Promise.reject(e.code?e:{code:"storage"}); } emit(c); return Promise.resolve(); };
+    const coll=c=>({
+      onSnapshot(next){ subs[c].push(next); setTimeout(()=>next({docs:Object.entries(store[c]).map(([id,v])=>({id,exists:true,data:()=>v}))}),0); return ()=>{}; },
+      add(data){ const id=Date.now().toString(36)+Math.random().toString(36).slice(2,8); return write(()=>{ store[c][id]=data; },c).then(()=>({id})); },
+      doc(id){ return { set:d=>write(()=>{ store[c][id]=d; },c), delete:()=>write(()=>{ delete store[c][id]; },c) }; }
+    });
+    window.addEventListener("storage",e=>{ if(e.key===KEY){ load(); emit("barang"); emit("transaksi"); } });
+    return {
+      collection:coll,
+      doc(path){ const [c,id]=path.split("/"); return coll(c).doc(id); },
+      exportJSON:()=>JSON.stringify({aplikasi:"Buku Stok Gudang",versi:1,diekspor:new Date().toISOString(),barang:store.barang,transaksi:store.transaksi},null,2),
+      importObj(o){ const old=store; store={barang:o.barang||{},transaksi:o.transaksi||{}}; try{ persist(); }catch(e){ store=old; return Promise.reject(e); } emit("barang"); emit("transaksi"); return Promise.resolve(); }
+    };
+  }
+  function saveFile(filename,data,type){
+    const url=URL.createObjectURL(new Blob([data],{type}));
+    const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  downloads={ save:({filename,data})=>{ saveFile(filename,data,"text/csv;charset=utf-8"); return Promise.resolve({status:"saved"}); } };
+
+  // ---------- Cadangan ----------
+  $("bakUnduh").addEventListener("click",()=>{ saveFile("cadangan-stok-"+today()+".json",db.exportJSON(),"application/json"); say("bakMsg","File cadangan diunduh.",true); });
+  let pending=null;
+  $("bakFile").addEventListener("change",async e=>{
+    const f=e.target.files[0]; e.target.value=""; if(!f) return;
+    try{ const o=JSON.parse(await f.text()); if(!o||typeof o!=="object"||!o.barang||!o.transaksi) throw 0;
+      pending=o; const nb=Object.keys(o.barang).length, nt=Object.keys(o.transaksi).length;
+      $("bakConfirm").innerHTML=`<div class="msg err">File berisi ${nb} barang dan ${nt} transaksi. Data di browser ini akan diganti seluruhnya. <span class="actions" style="display:inline-flex;margin-left:6px"><button class="btn sm danger" type="button" id="bakYa">Ganti data</button><button class="btn sm" type="button" id="bakBatal">Batal</button></span></div>`;
+    }catch(_){ say("bakMsg","File tidak dikenali. Pilih file cadangan .json dari aplikasi ini."); }
+  });
+  $("bakConfirm").addEventListener("click",async e=>{
+    if(e.target.id==="bakBatal"){ pending=null; $("bakConfirm").innerHTML=""; }
+    if(e.target.id==="bakYa"&&pending){ try{ await db.importObj(pending); say("bakMsg","Data berhasil dipulihkan.",true); }catch(err){ say("bakMsg",errText(err)); } pending=null; $("bakConfirm").innerHTML=""; }
+  });
+
+  // ---------- Mulai ----------
+  db=makeLocalDB();
   renderAll(); resetForm("m"); resetForm("k");
-  (async()=>{
-    if(!window.claude||!window.claude.use){ $("connDot").className="dot err"; $("connTxt").textContent="Penyimpanan tidak tersedia di tampilan ini"; return; }
-    claude.use("downloads").then(d=>{ downloads=d; if(!d) $("rExport").hidden=true; });
-    claude.use("user").then(async u=>{ if(!u) return; try{ const c=await u.can("data.write"); if(c===false){ canWrite=false; document.querySelectorAll("form button[type=submit]").forEach(b=>b.disabled=true); $("connTxt").textContent="Mode baca saja"; } }catch(_){} });
-    db=await claude.use("db");
-    if(!db){ $("connDot").className="dot err"; $("connTxt").textContent="Masuk ke akun untuk membuka data"; loaded={b:true,t:true}; renderAll(); return; }
-    const onErr=e=>{ $("connDot").className="dot err"; $("connTxt").textContent="Koneksi data terputus. Muat ulang halaman."; };
-    db.collection("barang").onSnapshot(s=>{ barang=new Map(s.docs.map(d=>{const v=d.data(); return [v.kode||d.id,{...v,kode:v.kode||d.id}];})); loaded.b=true; mark(); renderAll(); },onErr);
-    db.collection("transaksi").onSnapshot(s=>{ trx=s.docs.map(d=>({...d.data(),id:d.id})); loaded.t=true; mark(); renderAll(); const a=$("mNoDok"), b=$("kNoDok"); if(/^BM-\d{8}-\d{3}$/.test(a.value)) a.value=nextNoDok("BM",$("mTanggal").value); if(/^BK-\d{8}-\d{3}$/.test(b.value)) b.value=nextNoDok("BK",$("kTanggal").value); },onErr);
-    function mark(){ if(loaded.b&&loaded.t){ $("connDot").className="dot ok"; if(canWrite) $("connTxt").textContent="Tersimpan otomatis · tersinkron"; } }
-  })();
+  db.collection("barang").onSnapshot(s=>{ barang=new Map(s.docs.map(d=>{const v=d.data(); return [v.kode||d.id,{...v,kode:v.kode||d.id}];})); loaded.b=true; mark(); renderAll(); });
+  db.collection("transaksi").onSnapshot(s=>{ trx=s.docs.map(d=>({...d.data(),id:d.id})); loaded.t=true; mark(); renderAll(); const a=$("mNoDok"), b=$("kNoDok"); if(/^BM-\d{8}-\d{3}$/.test(a.value)) a.value=nextNoDok("BM",$("mTanggal").value); if(/^BK-\d{8}-\d{3}$/.test(b.value)) b.value=nextNoDok("BK",$("kTanggal").value); });
+  function mark(){ if(loaded.b&&loaded.t){ $("connDot").className="dot ok"; $("connTxt").textContent="Tersimpan di browser ini"; } }
 })();
 </script>
 
-</body></html>
+</body>
+</html>
